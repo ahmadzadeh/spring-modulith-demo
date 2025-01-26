@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <script src="https://unpkg.com/htmx.org"></script>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.1/dist/css/bootstrap.min.css" rel="stylesheet">
+  <title>Spring Modulith Demo</title>
+</head>
+<body>
+<div class="mt-3 d-flex justify-content-center">
+  <form id="checkout-form">
+    <div class="mb-3">
+      <label for="products" class="form-label">Product</label>
+      <select class="form-select" id="products" name="product" hx-get="/order/products"
+              hx-trigger="load" hx-target="#products">
+        <!-- Dynamic products loaded here -->
+      </select>
+      <input type="hidden" id="productName" name="productName" value="">
+    </div>
+    <div class="mb-3">
+      <label for="quantityInput" class="form-label">Quantity</label>
+      <input type="number" class="form-control" id="quantityInput" name="quantity" min="1" value="10">
+    </div>
+    <div class="d-flex justify-content-end">
+      <button type="button" class="btn btn-primary" hx-post="/order/modal" hx-target="#modal-body"
+              data-bs-toggle="modal" hx-include="#checkout-form" data-bs-target="#checkoutModal">
+        Checkout
+      </button>
+    </div>
+  </form>
+</div>
+
+<!-- Modal -->
+<div class="modal fade" id="checkoutModal" tabindex="-1" aria-labelledby="checkoutModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="checkoutModalLabel">Complete Order</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body" id="modal-body">
+
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.1/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+  document.addEventListener('htmx:afterRequest', (event) => {
+    if (event.detail.pathInfo.requestPath === '/order/products') {
+      const dropdown = document.getElementById('products');
+      dropdown.innerHTML = '';
+
+      // Parse the JSON response
+      const products = JSON.parse(event.detail.xhr.responseText);
+
+      products.forEach(product => {
+        const option = document.createElement('option');
+        option.value = product.sku;
+        option.textContent = product.name;
+        option.dataset.name = product.name;
+        dropdown.appendChild(option);
+      });
+      setProductName();
+    }
+  });
+
+  document.getElementById('products').addEventListener('change', setProductName);
+
+  function setProductName() {
+    const productsSelect = document.getElementById('products');
+    const selectedOption = productsSelect.options[productsSelect.selectedIndex];
+    const hiddenInput = document.getElementById('productName');
+    hiddenInput.value = selectedOption.text;
+  }
+
+  async function checkout() {
+    const checkoutButton = document.getElementById('checkout');
+    const paymentStatusContainer = document.getElementById('payment-status-container');
+    checkoutButton.disabled = true;
+
+    try {
+      // First, place the order
+      let payload = {
+        productSku: checkoutButton.dataset.productSku,
+        quantity: parseInt(checkoutButton.dataset.quantity),
+      };
+      const response = await fetch('/orders', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        checkoutButton.disabled = false;
+        throw new Error(await response.text());
+      }
+      let orderResponse = await response.json();
+      checkoutButton.style.display = 'none';
+
+      // Then, checkout the order
+      fetch(`/checkout/${orderResponse.orderId}`);
+
+
+      // Finally, Subscribe to the payment status event stream
+      const eventSource = new EventSource(`/order/${orderResponse.orderId}`);
+      paymentStatusContainer.innerHTML = `<p>${orderResponse.paymentStatus}</p>`;
+
+      eventSource.addEventListener('payment-status-update', (event) => {
+        const status = event.data;
+        paymentStatusContainer.innerHTML = `<p><strong>Payment Status:</strong> ${status}</p>`;
+      });
+
+      eventSource.addEventListener('paid', (event) => {
+        eventSource.close();
+        paymentStatusContainer.innerHTML = '';
+        const paymentCompletedMessage = document.getElementById('payment-completed-message');
+        paymentCompletedMessage.style.display = 'block';
+
+      });
+
+      eventSource.onerror = (e) => {
+        paymentStatusContainer.innerHTML = '<p style="color: red;">Error fetching payment status. Please try again.</p>';
+        eventSource.close();
+      };
+    } catch (error) {
+      paymentStatusContainer.innerHTML = `<p style="color: red;">${error.message}</p>`;
+    }
+  }
+</script>
+</body>
+</html>
